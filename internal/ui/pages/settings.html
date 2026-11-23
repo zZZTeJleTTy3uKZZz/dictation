@@ -1,0 +1,417 @@
+<!-- Окно настроек. Всё, что оно знает, приходит из ядра вызовом load(). -->
+<meta charset="utf-8">
+<title>Настройки MeetDigest</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ground: #f6f6f9;
+    --card: #ffffff;
+    --ink: #16161a;
+    --faint: #6e6e78;
+    --line: #e6e6ec;
+    --accent: #2f6df6;
+    --danger: #d7263d;
+    --shadow: 0 1px 2px rgba(16,16,26,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #131317;
+      --card: #1e1e24;
+      --ink: #f2f2f5;
+      --faint: #9a9aa6;
+      --line: #2e2e36;
+      --accent: #5b8bff;
+      --danger: #ff6b7f;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto; padding: 22px 22px 32px; max-width: 720px;
+    background: var(--ground); color: var(--ink);
+    font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+  h1 { margin: 0 0 4px; font-size: 19px; font-weight: 650; letter-spacing: -.01em; }
+  .подзаголовок { color: var(--faint); font-size: 13px; margin-bottom: 18px; }
+  h2 {
+    margin: 26px 0 8px; font-size: 11px; font-weight: 650;
+    letter-spacing: .09em; text-transform: uppercase; color: var(--faint);
+  }
+  /* Раздел — одна карточка: так видно, что настройки внутри про одно и то же. */
+  .раздел {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+  }
+  .row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 16px; border-top: 1px solid var(--line);
+  }
+  .раздел > .row:first-child { border-top: none; }
+  .text { flex: 1; min-width: 0; }
+  .title { font-weight: 550; }
+  .note {
+    color: var(--faint); font-size: 12.5px; margin-top: 3px;
+    /* Пояснение переносится, а не режется многоточием: обрезанное «предлагаю
+       только там, где сказа…» не объясняет ничего — а ради объяснения строка и
+       написана. */
+    overflow-wrap: anywhere;
+  }
+  /* Путь — исключение: он длинный, и перенос превратил бы строку в абзац. */
+  .note.путь { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .note.плохо { color: var(--danger); }
+
+  button, select, input {
+    font: inherit; color: var(--ink); background: var(--card);
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+  }
+  button { cursor: pointer; white-space: nowrap; background: transparent; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.убрать:hover { border-color: var(--danger); color: var(--danger); }
+  select { max-width: 230px; flex: none; cursor: pointer; }
+  input { width: 230px; flex: none; }
+  input::placeholder { color: var(--faint); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* Переключатель: в настройках его узнают глазом быстрее галочки. */
+  .switch { position: relative; width: 42px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .slider {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: var(--line); transition: background .15s; cursor: pointer;
+  }
+  .slider::after {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+    transition: transform .15s;
+  }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::after { transform: translateX(18px); }
+  .пусто { color: var(--faint); }
+
+  /* Две вкладки: настройки и история. Больше в окне ничего нет — человек
+     приходит сюда за одним из двух. */
+  .вкладки { display: flex; gap: 6px; margin: 16px 0 4px; }
+  .вкладка {
+    font: inherit; color: var(--faint); background: transparent;
+    border: 1px solid transparent; border-radius: 9px; padding: 7px 14px;
+    cursor: pointer;
+  }
+  .вкладка:hover { color: var(--ink); }
+  .вкладка.выбрана { color: var(--ink); background: var(--card); border-color: var(--line); }
+
+  /* История диктовки. */
+  .история { display: flex; flex-direction: column; gap: 10px; }
+  /* display у класса сильнее, чем у атрибута hidden: без этой строки история
+     висела бы под настройками всегда. */
+  .история[hidden] { display: none; }
+  .случай {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 16px; box-shadow: var(--shadow);
+  }
+  .случай.нет { border-color: var(--danger); }
+  .шапка { display: flex; align-items: baseline; gap: 10px; color: var(--faint); font-size: 12.5px; }
+  .статус {
+    margin-left: auto; padding: 1px 8px; border: 1px solid var(--line);
+    border-radius: 999px; white-space: nowrap;
+  }
+  .статус.нет { color: var(--danger); border-color: var(--danger); }
+  .речь { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; }
+  .речь.нет { color: var(--faint); font-style: italic; }
+  .история .кнопки { display: flex; gap: 8px; margin-top: 10px; }
+  .пусто { color: var(--faint); text-align: center; padding: 48px 20px; }
+
+  /* Отказ ядра: человек должен видеть причину, а не гадать, почему не сработало. */
+  .беда {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    background: var(--danger); color: #fff; padding: 9px 14px;
+    border-radius: 9px; max-width: 90%; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  }
+</style>
+
+<h1>Диктовка MeetDigest</h1>
+<div class="подзаголовок">Правки применяются сразу — сохранять ничего не нужно</div>
+<nav class="вкладки">
+  <button class="вкладка выбрана" id="вкладкаНастройки">Настройки</button>
+  <button class="вкладка" id="вкладкаИстория">История</button>
+</nav>
+<div id="стол"></div>
+<div id="история" class="история" hidden></div>
+
+<script>
+  // Страница ничего не решает сама: читает состояние у ядра и зовёт его обратно.
+  // Ответ ядра — уже новое состояние, поэтому перерисовываемся тем, что оно
+  // вернуло, а не тем, что мы предположили.
+  const экран = document.getElementById("стол");
+  let раздел = null;
+
+  function текст(value) {
+    const место = document.createElement("div");
+    место.textContent = value === undefined || value === null ? "" : value;
+    return место.innerHTML;
+  }
+
+  // путь — это адрес на диске, а не объяснение: его переносить нельзя.
+  const адрес = new RegExp("^([A-Za-z]:[\\\\/]|\\\\\\\\|~[\\\\/])");
+  function путь(note) { return адрес.test(note || ""); }
+
+  function заголовок(name) {
+    const шапка = document.createElement("h2");
+    шапка.textContent = name;
+    экран.append(шапка);
+    раздел = document.createElement("div");
+    раздел.className = "раздел";
+    экран.append(раздел);
+  }
+
+  function строка(title, note, плохо) {
+    const место = document.createElement("div");
+    место.className = "row";
+    const вид = "note" + (путь(note) ? " путь" : "") + (плохо ? " плохо" : "");
+    место.innerHTML =
+      '<div class="text"><div class="title">' + текст(title) + "</div>" +
+      (note ? '<div class="' + вид + '" title="' + текст(note) + '">' + текст(note) + "</div>" : "") +
+      "</div>";
+    раздел.append(место);
+    return место;
+  }
+
+  // просьба — позвать ядро и перерисоваться его ответом.
+  async function просьба(сделать) {
+    try {
+      const свежее = await сделать();
+      нарисовать(свежее);
+    } catch (беда) {
+      сказать(String(беда && беда.message ? беда.message : беда));
+    }
+  }
+
+  function сказать(что) {
+    const прежняя = document.querySelector(".беда");
+    if (прежняя) прежняя.remove();
+    const место = document.createElement("div");
+    место.className = "беда";
+    место.textContent = что;
+    document.body.append(место);
+    setTimeout(() => место.remove(), 6000);
+  }
+
+  function выключатель(title, note, on, change) {
+    const место = строка(title, note);
+    const обёртка = document.createElement("label");
+    обёртка.className = "switch";
+    обёртка.innerHTML = '<input type="checkbox"' + (on ? " checked" : "") + '><span class="slider"></span>';
+    обёртка.querySelector("input").addEventListener("change", () => просьба(() => change("")));
+    место.append(обёртка);
+  }
+
+  function выбор(title, note, options, value, change, плохо) {
+    const место = строка(title, note, плохо);
+    const список = document.createElement("select");
+    let известно = false;
+    for (const one of options || []) {
+      const пункт = document.createElement("option");
+      пункт.value = one.key;
+      пункт.textContent = one.note && one.note !== "готов" && one.key !== value
+        ? one.title : one.title;
+      пункт.selected = one.key === value;
+      if (one.key === value) известно = true;
+      список.append(пункт);
+    }
+    if (!известно && value) {
+      // Ядро новее окна: показываем значение как есть, а не пустой список.
+      const пункт = document.createElement("option");
+      пункт.value = value;
+      пункт.textContent = value;
+      пункт.selected = true;
+      список.append(пункт);
+    }
+    список.addEventListener("change", () => просьба(() => change(список.value)));
+    место.append(список);
+  }
+
+  function кнопка(title, note, label, press, опасная) {
+    const место = строка(title, note);
+    const нажать = document.createElement("button");
+    нажать.textContent = label;
+    if (опасная) нажать.className = "убрать";
+    нажать.addEventListener("click", () => просьба(press));
+    место.append(нажать);
+  }
+
+  function поле(title, note, value, placeholder, change, секрет) {
+    const место = строка(title, note);
+    const ввод = document.createElement("input");
+    ввод.value = value || "";
+    ввод.placeholder = placeholder || "";
+    if (секрет) ввод.type = "password";
+    // Пишем в ядро по уходу из поля, а не на каждую букву: иначе половина
+    // набранного ключа успевала бы лечь в файл.
+    ввод.addEventListener("change", () => просьба(() => change(ввод.value)));
+    место.append(ввод);
+  }
+
+  function нарисовать(дано) {
+    экран.textContent = "";
+
+    заголовок("Откуда брать записи");
+    выключатель("Телемост", дано.telemost_note, дано.telemost, setTelemost);
+    for (const folder of дано.folders || []) {
+      if (folder.provider) {
+        // У папки провайдера кнопки «убрать» нет нарочно: она вернулась бы сама
+        // при следующем обходе, и кнопка оказалась бы обманом.
+        строка(folder.title, folder.path);
+      } else {
+        кнопка(folder.title, folder.path, "убрать", () => setRemoveFolder(folder.path), true);
+      }
+    }
+    кнопка("Добавить папку", "любая папка, куда складываются записи разговоров",
+           "выбрать", addFolder);
+
+    заголовок("Диктовка");
+    выключатель("Диктофон", "нажать сочетание — начать диктовку, нажать снова — закончить",
+                дано.voice, setVoice);
+    выбор("Сочетание клавиш", дано.hotkey_note, дано.hotkeys, дано.hotkey, setHotkey);
+    // Способ распознавания: облачные провайдеры. Местных моделей в диктовке
+    // больше нет — звук разбирает облако, и выбор один: какое именно.
+    выбор("Способ распознавания", дано.speech_note, дано.speeches,
+          дано.speech, setSpeech);
+    // Адрес и модель не правим полем: они лежат в providers.json рядом с
+    // ключом, и правка там же — одна запись.
+    поле("Ключ Groq / 9router", дано.groq_key_set ? "ключ задан" : "ключа нет",
+         "", дано.groq_key_set ? "••••••••" : "вставить ключ", setGroqKey, true);
+    строка("Адрес распознавания", дано.groq_url);
+    строка("Модель", дано.groq_model + " · язык ru");
+    // Термин словаря. Он встаёт первым — не первым он до распознавания не
+    // доживает, подсказка обрезается по концу.
+    поле("Термин словаря", "пополняется из диктовок, встаёт первым", "",
+         "слово или имя", setGlossaryAdd);
+    поле("Убрать термин", "если попал ошибочный", "",
+         "слово или имя", setGlossaryRemove);
+
+    заголовок("Пока идёт запись встречи");
+    выключатель("Окно с таймером", "плашка в углу экрана — видно, не отводя глаз",
+                дано.window, setWindow);
+    выключатель("Отметка в лотке", "значок сервиса становится красным",
+                дано.tray, setTray);
+
+    заголовок("Запись встреч");
+    выбор("Качество", дано.quality_note, дано.qualities, дано.quality, setQuality);
+    выключатель("Писать и экран", "для встреч, где показывают систему или документ",
+                дано.screen, setScreen);
+    выбор("Подробность экрана", дано.screen_quality_note, дано.screen_qualities,
+          дано.screen_quality, setScreenQuality);
+    выбор("Какой экран писать", дано.screens_note, дано.screens,
+          дано.screen_target, setScreenTarget);
+    кнопка("Папка записей", дано.record_folder, "изменить", chooseRecordFolder);
+
+    заголовок("Разговоры на этом компьютере");
+    выбор("Что делать со встречами", дано.mode_note, дано.modes, дано.mode, setMode);
+
+    заголовок("Решения по приложениям");
+    if (!дано.decided || дано.decided.length === 0) {
+      const место = строка("Решений пока нет",
+                           "их принимают на плашке встречи — «всегда» или «никогда»");
+      место.querySelector(".title").classList.add("пусто");
+    } else {
+      for (const app of дано.decided) {
+        выбор(app.title, "", дано.decisions, app.decision,
+              (value) => setApp(app.program + "=" + value));
+      }
+    }
+  }
+
+  // ── вкладки и история ──────────────────────────────────────────────────
+
+  const вкладкаНастройки = document.getElementById("вкладкаНастройки");
+  const вкладкаИстория = document.getElementById("вкладкаИстория");
+  const история = document.getElementById("история");
+
+  function показатьВкладку(имя) {
+    const наИстории = имя === "история";
+    вкладкаНастройки.classList.toggle("выбрана", !наИстории);
+    вкладкаИстория.classList.toggle("выбрана", наИстории);
+    экран.hidden = наИстории;
+    история.hidden = !наИстории;
+    if (наИстории) просьбаИстории(loadHistory);
+  }
+
+  async function просьбаИстории(сделать) {
+    try {
+      нарисоватьИсторию(await сделать());
+    } catch (беда) {
+      сказать(String(беда && беда.message ? беда.message : беда));
+    }
+  }
+
+  // нарисоватьИсторию — строки диктовки: что сказано и что с этим стало.
+  // Нераспознанная строка отличается цветом и кнопкой повтора: её не надо
+  // искать глазами среди удачных.
+  function нарисоватьИсторию(ответ) {
+    история.textContent = "";
+    const все = (ответ && ответ.items) || [];
+    if (ответ && ответ.trouble) {
+      сказать("история не прочиталась: " + ответ.trouble);
+      return;
+    }
+    if (все.length === 0) {
+      const пусто = document.createElement("div");
+      пусто.className = "пусто";
+      пусто.textContent = "Пока ничего не сказано. Нажмите сочетание клавиш и продиктуйте.";
+      история.append(пусто);
+      return;
+    }
+    for (const one of все) {
+      const карточка = document.createElement("div");
+      карточка.className = "случай" + (one.can_retry ? " нет" : "");
+
+      const шапка = document.createElement("div");
+      шапка.className = "шапка";
+      for (const part of [one.at, one.when, one.length]) {
+        if (!part) continue;
+        const кусок = document.createElement("span");
+        кусок.textContent = part;
+        шапка.append(кусок);
+      }
+      const статус = document.createElement("span");
+      статус.className = "статус" + (one.can_retry ? " нет" : "");
+      статус.textContent = one.status || "распознано";
+      шапка.append(статус);
+      карточка.append(шапка);
+
+      const речь = document.createElement("div");
+      речь.className = "речь" + (one.text ? "" : " нет");
+      речь.textContent = one.text || "не распознано: звук сохранён, его можно разобрать ещё раз";
+      карточка.append(речь);
+
+      if (one.can_retry) {
+        const кнопки = document.createElement("div");
+        кнопки.className = "кнопки";
+        const нажать = document.createElement("button");
+        нажать.textContent = "Отправить ещё раз";
+        нажать.addEventListener("click", async () => {
+          нажать.disabled = true;
+          нажать.textContent = "распознаю…";
+          try {
+            нарисоватьИсторию(await retry(one.audio));
+          } catch (беда) {
+            сказать(String(беда && беда.message ? беда.message : беда));
+            нажать.disabled = false;
+            нажать.textContent = "Отправить ещё раз";
+          }
+        });
+        кнопки.append(нажать);
+        карточка.append(кнопки);
+      }
+      история.append(карточка);
+    }
+  }
+
+  вкладкаНастройки.addEventListener("click", () => показатьВкладку("настройки"));
+  вкладкаИстория.addEventListener("click", () => показатьВкладку("история"));
+
+  просьба(load);
+  // Esc закрывает окно: так закрывают всё остальное в Windows.
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeWindow(); });
+</script>

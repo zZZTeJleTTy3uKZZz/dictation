@@ -1,0 +1,51 @@
+# Публичное дерево «Диктовки» — белый список путей (контракт 2026-11-19-public-release.md, §1).
+#
+# scripts/public-check собирает ровно эти файлы и ищет в них запрещённые строки.
+# scripts/build-public-tree собирает дерево выпуска по этому же списку и
+# добавляет third_party/ с используемыми пакетами kits.
+# Что сюда НЕ входит: служебные файлы и каталоги разработки (правила агентов,
+# заметки, рабочие деревья), настройки CI, скрипты под конкретные машины,
+# скрипты выпуска, тесты и внутренние данные. Сам установщик installer/dictation.iss
+# входит: из него собирается Dictation-Setup.exe.
+#
+# Правила записи:
+#   путь или каталог с /**  — включить;
+#   строка с ! в начале     — исключить (применяется после включений).
+# Пути — от корня репозитория, с прямым слешем.
+
+README.md
+LICENSE
+install.ps1
+installer/dictation.iss
+go.mod
+go.sum
+.gitattributes
+.gitignore
+release/public-tree.txt
+
+cmd/**
+internal/**
+assets/**
+native/**
+scripts/public-check/**
+scripts/release-manifest/**
+
+# Заполняется scripts/build-public-tree: используемые пакеты kits с
+# переписанными import-путями и NOTICE с происхождением.
+third_party/**
+
+flutter/lib/**
+flutter/assets/**
+flutter/packages/kits_ui/lib/**
+flutter/packages/kits_ui/pubspec.yaml
+flutter/pubspec.yaml
+flutter/windows/**
+flutter/analysis_options.yaml
+flutter/README.md
+
+!**/*_test.go
+!**/*_test.dart
+!**/testdata/**
+!internal/testiso/**
+!assets/*.png
+!scripts/public-check/**/*_test.go

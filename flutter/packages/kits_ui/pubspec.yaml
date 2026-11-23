@@ -1,0 +1,22 @@
+name: kits_ui
+description: >-
+  Кит интерфейса Flutter: дизайн-токены @kits/ui и восемь компонентов по
+  спецификациям компонентов.
+version: 0.1.1
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+  flutter: '>=3.38.0'
+
+# Единственная зависимость времени выполнения — Flutter SDK: кит не тянет
+# управление состоянием, генераторы и сторонние виджеты. Тесты и линтер нужны
+# только при разработке.
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+  flutter_test:
+    sdk: flutter
