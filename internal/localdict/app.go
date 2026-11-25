@@ -28,7 +28,7 @@ import (
 	"github.com/zZZTeJleTTy3uKZZz/dictation/third_party/mybits/mediapause"
 )
 
-const Version = "1.13.2"
+const Version = "1.13.3"
 
 // freeOSMemory возвращает память системе. Отдельная переменная, а не прямой
 // вызов: проверка должна видеть, что возврат был, не измеряя память процесса.

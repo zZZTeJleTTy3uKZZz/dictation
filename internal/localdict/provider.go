@@ -129,10 +129,18 @@ func describeCloud(channel speech.Channel) (endpointOf, string) {
 	}
 }
 
+// isGroqHost — узел Groq: api.groq.com и его поддомены. Один признак на
+// классификацию провайдера и на стирание ключа: адрес Groq, вписанный как «свой
+// провайдер», делит ключ с Groq (имя ключа одно), и стереть его значит стереть
+// ключ Groq.
+func isGroqHost(host string) bool {
+	return host == "api.groq.com" || strings.HasSuffix(host, ".groq.com")
+}
+
 // classifyProvider — вид и подпись по узлу облака.
 func classifyProvider(host, channelTitle string) (string, string) {
 	switch {
-	case host == "api.groq.com" || strings.HasSuffix(host, ".groq.com"):
+	case isGroqHost(host):
 		return providerGroq, "Groq напрямую"
 	case channelTitle != "":
 		return providerCloud, channelTitle

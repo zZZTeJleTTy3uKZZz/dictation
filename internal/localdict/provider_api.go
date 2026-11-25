@@ -78,6 +78,22 @@ func (a *App) providerRoutes(mux *http.ServeMux) {
 		write(w, a.Settings())
 	})
 
+	// Стереть ключ выбранного способа: кнопка «Удалить» в настройках. Ключ
+	// наружу не отдаётся ни до, ни после — ответ тот же, что у apply.
+	mux.HandleFunc("POST /provider/forget", func(w http.ResponseWriter, r *http.Request) {
+		var ask struct {
+			Speech string `json:"speech"`
+		}
+		if !read(w, r, &ask) {
+			return
+		}
+		if err := a.forgetProvider(ask.Speech); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		write(w, a.Settings())
+	})
+
 	mux.HandleFunc("POST /provider/share", func(w http.ResponseWriter, r *http.Request) {
 		var ask struct {
 			WithKey bool `json:"with_key"`
@@ -385,6 +401,57 @@ func (a *App) providerLink(withKey bool) (string, error) {
 		return providercfg.Build(link)
 	default:
 		return "", errors.New("провайдер ещё не настроен: сначала выберите его")
+	}
+}
+
+// forgetProvider — стереть ключ способа и его адрес (для своего провайдера).
+//
+// ЗАЧЕМ ТАК. Стереть ключ — не значит молча сменить способ. Выбранный способ
+// остаётся выбранным, а служба честно говорит «ключа нет»: разбор не пойдёт,
+// пока ключ не вписан заново. Поэтому способ, который был подразумеваемым
+// (пустое поле при наличии ключа или адреса), закрепляется явно: иначе после
+// стирания выбор перескочил бы на другой провайдер.
+//
+// Порядок: сначала ключ в хранилище (со сверкой), и только потом настройки.
+// Не удалось стереть — настройки прежние.
+func (a *App) forgetProvider(name string) error {
+	voice := a.voice()
+	chosen := chosenSpeech(voice)
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "groq":
+		if err := speech.ForgetGroqKey(speech.ProvidersPath()); err != nil {
+			return err
+		}
+		if err := speech.ForgetGroqProvider(speech.ProvidersPath()); err != nil {
+			return err
+		}
+		if chosen == "groq" {
+			return a.ChangeSettings(map[string]any{"speech": "groq"})
+		}
+		return nil
+	case "api":
+		// Адреса нет — и ключа у своего провайдера нет. Стирать с пустым адресом
+		// нельзя: имя ключа у пустого адреса — Groq, и ключ Groq ушёл бы вместе с
+		// чужим. Поэтому пустой адрес просто пропускаем.
+		// Адрес Groq, вписанный как «свой провайдер», тоже не стираем: его ключ —
+		// это ключ Groq (одно имя в хранилище). Такой адрес очищаем из настроек,
+		// а ключ Groq оставляем: пользоваться им может способ Groq.
+		if address := strings.TrimSpace(voice.SpeechURL); address != "" && !isGroqHost(hostOf(address)) {
+			if err := speech.ForgetKeyChecked(speech.ProvidersPath(), address); err != nil {
+				return err
+			}
+		}
+		fields := map[string]any{
+			"speech_url":   "",
+			"speech_model": "",
+			"speech_key":   "",
+		}
+		if chosen == "api" {
+			fields["speech"] = "api"
+		}
+		return a.ChangeSettings(fields)
+	default:
+		return errors.New("выберите провайдера: Groq или свой сервис")
 	}
 }
 

@@ -57,16 +57,18 @@ type updateMenu struct {
 	line    *systray.MenuItem
 	install *systray.MenuItem
 	check   *systray.MenuItem
-	// tip — подсказка, которая сейчас стоит у значка: systray перерисовывать
-	// незачем, если она не поменялась.
-	tip string
+	// shown — что сейчас стоит в пунктах и у значка. Пункт трогаем, только если
+	// вид поменялся: systray на каждый Hide у спрятанного пункта пишет в журнал
+	// «unable to hideMenuItem», а меню перерисовывается раз в две секунды.
+	shown trayupdate.MenuView
 }
 
 // updateMemory — что значок помнит об обновлении между опросами.
 type updateMemory struct {
 	guard sync.Mutex
-	state updates.State
-	err   error
+	// mem — ответы службы и счёт неудач подряд: строку «служба не запущена»
+	// показываем, только когда неудач больше одной.
+	mem trayupdate.Memory
 	// busy — идёт проверка или установка: второй клик не запускает вторую.
 	busy bool
 }
@@ -77,15 +79,32 @@ const trayTip = "MeetDigest — разбор встреч"
 // remember запоминает ответ службы для меню и значка.
 func (t *Tray) remember(state updates.State, err error) {
 	t.update.guard.Lock()
-	t.update.state, t.update.err = state, err
+	t.update.mem.Remember(state, err)
 	t.update.guard.Unlock()
 }
 
-// updateView отдаёт последний ответ службы.
+// showLocal ставит местный ответ, не учитывая его в счёте неудач.
+func (t *Tray) showLocal(state updates.State) {
+	t.update.guard.Lock()
+	t.update.mem.Local(state)
+	t.update.guard.Unlock()
+}
+
+// markChecking ставит промежуточное «Проверяю». Это не обращение к службе, и
+// счёт неудач оно не трогает: иначе строка «служба не запущена» пропадала бы
+// на время проверки.
+func (t *Tray) markChecking() {
+	t.update.guard.Lock()
+	t.update.mem.Checking()
+	t.update.guard.Unlock()
+}
+
+// updateView отдаёт последний ответ службы; причина недоступности — только
+// если служба не отвечает несколько раз подряд.
 func (t *Tray) updateView() (updates.State, error) {
 	t.update.guard.Lock()
 	defer t.update.guard.Unlock()
-	return t.update.state, t.update.err
+	return t.update.mem.Read()
 }
 
 // claimUpdate занимает проверку или установку; false — уже идёт другая.
@@ -125,7 +144,7 @@ func (t *Tray) checkUpdate(ctx context.Context) {
 		return
 	}
 	defer t.releaseUpdate()
-	t.remember(updates.State{Status: updates.StatusChecking}, nil)
+	t.markChecking()
 	state, err := trayupdate.Check(ctx, t.upd, updatePause, checkLimit)
 	t.remember(state, err)
 	if err != nil {
@@ -146,8 +165,16 @@ func (t *Tray) installUpdate(ctx context.Context) {
 	defer t.releaseUpdate()
 	state, _ := t.updateView()
 	busy := t.dictation.Going() || t.store.Read().LiveRecording()
-	result, err := trayupdate.Update(ctx, t.upd, state, busy, updatePause, downloadLimit)
-	t.remember(result, err)
+	result, reached, err := trayupdate.Update(ctx, t.upd, state, busy, updatePause, downloadLimit)
+	switch {
+	case err != nil || reached:
+		// Ответ или ошибка службы — это итог обращения и идёт в счёт.
+		t.remember(result, err)
+	default:
+		// Местный ответ (идёт запись): счёт недоступности не трогаем, иначе
+		// строка «служба не запущена» гасла бы из-за того, чего служба не знала.
+		t.showLocal(result)
+	}
 	if err != nil {
 		t.log.Warn("обновление не запустилось", "err", err)
 		return
@@ -156,29 +183,37 @@ func (t *Tray) installUpdate(ctx context.Context) {
 }
 
 // paintUpdate — пункты обновления по последнему ответу службы. Вызывается из
-// refresh каждые две секунды: только читает память, сети не трогает.
+// refresh каждые две секунды: только читает память, сети не трогает. Пункт
+// меняется только тогда, когда меняется его вид.
 func (t *Tray) paintUpdate(menu *updateMenu) {
 	state, err := t.updateView()
-	if line := trayupdate.Line(state, err); line != "" {
-		menu.line.SetTitle(line)
-		menu.line.Show()
-	} else {
-		menu.line.Hide()
-	}
+	view := trayupdate.View(state, err)
+	prev := menu.shown
+	menu.shown = view
 
-	if trayupdate.Offer(state) {
-		menu.install.SetTitle(trayupdate.InstallTitle(state))
-		menu.install.Show()
-	} else {
-		menu.install.Hide()
-	}
-
-	if tip := trayupdate.Tooltip(state); tip != menu.tip {
-		menu.tip = tip
+	applyItem(menu.line, prev.Line, view.Line)
+	applyItem(menu.install, prev.Install, view.Install)
+	if view.Tip != prev.Tip {
+		tip := view.Tip
 		if tip == "" {
 			tip = trayTip
 		}
 		systray.SetTooltip(tip)
+	}
+}
+
+// applyItem приводит пункт к тексту next; пустой текст — пункт спрятан.
+func applyItem(item *systray.MenuItem, prev, next string) {
+	if next == prev {
+		return
+	}
+	if next == "" {
+		item.Hide()
+		return
+	}
+	item.SetTitle(next)
+	if prev == "" {
+		item.Show()
 	}
 }
 

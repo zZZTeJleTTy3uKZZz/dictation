@@ -21,8 +21,9 @@ import (
 // увидит, что служба занята, и сможет нажать ещё раз.
 var ErrSlow = errors.New("служба обновления долго не отвечает — попробуйте позже")
 
-// busyMessage — что видит человек, когда установка ждёт конца записи.
-const busyMessage = "Идёт запись — обновление поставится после её конца"
+// busyMessage — что видит человек, когда установка нельзя во время записи.
+// Честно: автоустановки после записи нет, поставить можно будет по пункту меню.
+const busyMessage = "Идёт запись — обновление можно будет поставить после её конца"
 
 // Service — то, о чём значок просит службу. Настоящая реализация — функции
 // localdict.Update*; в тестах подменяется.
@@ -154,30 +155,37 @@ func Check(ctx context.Context, svc Service, pause, limit time.Duration) (update
 //
 // busy — идёт диктовка. Установку в этот миг не запускаем вовсе: служба и так
 // отложила бы её, но человек увидит причину, а не молчание.
-func Update(ctx context.Context, svc Service, state updates.State, busy bool, pause, limit time.Duration) (updates.State, error) {
+//
+// fromService — ответила ли служба. Во время записи при уже скачанной версии
+// службу не спрашивают, и причина записи — местный ответ, а не итог обращения:
+// его нельзя считать «служба работает» и сбрасывать счёт недоступности.
+func Update(ctx context.Context, svc Service, state updates.State, busy bool, pause, limit time.Duration) (updates.State, bool, error) {
+	reached := false
 	switch ActionFor(state) {
 	case StepNone, StepWait:
-		return state, nil
+		return state, false, nil
 	case StepDownload:
 		if _, err := svc.Download(ctx); err != nil {
-			return updates.State{}, err
+			return updates.State{}, false, err
 		}
+		reached = true
 		done, err := waitWhile(ctx, svc, pause, limit, updates.StatusDownloading)
 		if err != nil {
-			return done, err
+			return done, reached, err
 		}
 		if done.Status != updates.StatusReady {
 			// Скачивание не вышло (отмена, ошибка сети): показываем, что
 			// вышло, а не ставим то, чего нет.
-			return done, nil
+			return done, reached, nil
 		}
 		state = done
 	}
 	if busy {
 		state.Message = busyMessage
-		return state, nil
+		return state, reached, nil
 	}
-	return svc.Install(ctx)
+	result, err := svc.Install(ctx)
+	return result, true, err
 }
 
 // waitWhile читает состояние, пока оно равно status. Первое чтение — после
@@ -201,4 +209,83 @@ func waitWhile(ctx context.Context, svc Service, pause, limit time.Duration, sta
 			return state, ErrSlow
 		}
 	}
+}
+
+// unreachableAfter — сколько неудачных обращений подряд, прежде чем показать
+// причину в меню. Одна неудача при старте (служба ещё поднимается) не должна
+// мигать строкой «служба не запущена».
+const unreachableAfter = 2
+
+// Streak считает обращения к службе, которые не удались подряд.
+type Streak struct {
+	failures int
+}
+
+// Record учитывает итог очередного обращения: удача сбрасывает счёт.
+func (s *Streak) Record(err error) {
+	if err == nil {
+		s.failures = 0
+		return
+	}
+	s.failures++
+}
+
+// Shown отдаёт ошибку для меню, только если служба недоступна достаточно долго.
+func (s Streak) Shown(err error) error {
+	if err == nil || s.failures < unreachableAfter {
+		return nil
+	}
+	return err
+}
+
+// MenuView — что должно стоять в пунктах обновления. Пустая строка — пункт
+// спрятан; пустой Tip — подсказка значка по умолчанию.
+type MenuView struct {
+	Line    string
+	Install string
+	Tip     string
+}
+
+// View собирает пункты меню и подсказку из состояния службы и причины, по
+// которой её не удалось спросить (уже отфильтрованной через Streak).
+func View(state updates.State, callErr error) MenuView {
+	view := MenuView{Line: Line(state, callErr), Tip: Tooltip(state)}
+	if Offer(state) {
+		view.Install = InstallTitle(state)
+	}
+	return view
+}
+
+// Memory помнит последний ответ службы для меню и значка.
+//
+// Промежуточное «Проверяю» не считается обращением: оно пишется через Checking
+// и счёт недоступности не трогает. Иначе одна проверка сбрасывала бы «служба не
+// запущена», и строка пропадала бы до следующего опроса.
+type Memory struct {
+	state  updates.State
+	err    error
+	streak Streak
+}
+
+// Remember запоминает итог обращения к службе.
+func (m *Memory) Remember(state updates.State, err error) {
+	m.state, m.err = state, err
+	m.streak.Record(err)
+}
+
+// Checking ставит промежуточное «Проверяю» без учёта в счёте неудач.
+func (m *Memory) Checking() {
+	m.Local(updates.State{Status: updates.StatusChecking})
+}
+
+// Local ставит ответ, которого служба не давала (например, «идёт запись»).
+// Счёт неудач он не трогает: отсутствие связи этим не подтверждено и не
+// опровергнуто.
+func (m *Memory) Local(state updates.State) {
+	m.state, m.err = state, nil
+}
+
+// Read отдаёт состояние и причину недоступности, если она уже видна.
+func (m Memory) Read() (updates.State, error) {
+	return m.state, m.streak.Shown(m.err)
 }

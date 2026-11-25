@@ -1887,23 +1887,70 @@ class _DictationWindowState extends State<DictationWindow> {
   );
 
   /// Строка провайдера: нажимается целиком, галочка справа.
-  Widget _choiceRow(SettingChoice one) => KitsListRow(
-    density: KitsListRowDensity.compact,
-    leading: Icon(_speechIcon(one.key), size: 18),
-    title: one.title,
-    detail: one.note,
-    detailMultiline: true,
-    onTap: acting
-        ? null
-        : () {
-            // Способ меняет только служба, и повторное нажатие ничего не
-            // ломает: просьба называет поле и значение.
-            if (one.key != speech) {
-              _askSettings(<String, dynamic>{'speech': one.key});
-            }
-          },
-    trailing: _chosenMark(one.key == speech),
-  );
+  ///
+  /// Если служба присылает `providers`, в строке видно, задан ли ключ, и есть
+  /// кнопка «Настроить»/«Изменить» для вписывания, замены и удаления ключа.
+  Widget _choiceRow(SettingChoice one) {
+    final slot = _providerSlot(one.key);
+    return KitsListRow(
+      density: KitsListRowDensity.compact,
+      leading: Icon(_speechIcon(one.key), size: 18),
+      title: one.title,
+      detail: slot == null ? one.note : '${one.note} · ${_keyState(slot)}',
+      detailMultiline: true,
+      onTap: acting
+          ? null
+          : () {
+              // Способ меняет только служба, и повторное нажатие ничего не
+              // ломает: просьба называет поле и значение.
+              if (one.key != speech) {
+                _askSettings(<String, dynamic>{'speech': one.key});
+              }
+            },
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (slot != null) ...<Widget>[
+            _actionButton(
+              slot['key_set'] == true ? 'Изменить' : 'Настроить',
+              acting ? null : () => _configureProvider(slot),
+            ),
+            const SizedBox(width: 8),
+          ],
+          _chosenMark(one.key == speech),
+        ],
+      ),
+    );
+  }
+
+  /// Запись провайдера из `providers` службы. Старая служба поля не знает —
+  /// тогда null, и кнопок настройки в окне нет вовсе.
+  Map<String, dynamic>? _providerSlot(String key) {
+    final raw = view['providers'];
+    if (raw is! List) return null;
+    for (final one in raw) {
+      if (one is Map && one['key'] == key) {
+        return Map<String, dynamic>.from(one);
+      }
+    }
+    return null;
+  }
+
+  /// Признак ключа для человека: только «задан» или «нет», значения не видно.
+  String _keyState(Map<String, dynamic> slot) =>
+      slot['key_set'] == true ? 'ключ задан' : 'ключа нет';
+
+  /// «Настроить»/«Изменить»: диалог ключа. Служба отвечает свежими настройками,
+  /// окно их берёт и говорит, что сделано.
+  Future<void> _configureProvider(Map<String, dynamic> slot) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => _ProviderKeyDialog(client: client, slot: slot),
+    );
+    if (result == null || !mounted) return;
+    setState(() => settings = result['fresh'] as Map<String, dynamic>);
+    lineToast(context, result['said'] as String? ?? '');
+  }
 
   /// Значок провайдера по ключу службы. Незнакомый ключ — общий значок
   /// распознавания: окно не должно падать на новой сборке службы.
@@ -3514,6 +3561,354 @@ class _PasteLinkDialogState extends State<_PasteLinkDialog> {
           child: Text(busy ? 'Применяю…' : 'Применить'),
         ),
       ],
+    );
+  }
+}
+
+/// Настройка ключа прямо в окне: вписать, заменить или удалить.
+///
+/// Ключ здесь только вводится и уходит службе. После сохранения его нигде не
+/// показываем, а поле очищается при закрытии: окно хранит ключ лишь пока
+/// диалог открыт. Адрес и модель своего провайдера приходят из `providers`
+/// службы; сам ключ служба наружу не отдаёт никогда.
+class _ProviderKeyDialog extends StatefulWidget {
+  const _ProviderKeyDialog({required this.client, required this.slot});
+
+  final DictationClient client;
+
+  /// Запись `providers` службы: key, title, key_set, url, model, own_url.
+  final Map<String, dynamic> slot;
+
+  @override
+  State<_ProviderKeyDialog> createState() => _ProviderKeyDialogState();
+}
+
+class _ProviderKeyDialogState extends State<_ProviderKeyDialog> {
+  final url = TextEditingController();
+  final model = TextEditingController();
+  final key = TextEditingController();
+  bool busy = false;
+  bool showKey = false;
+  String? error;
+  ProviderCheck? check;
+
+  String get _speech => widget.slot['key'] as String? ?? '';
+
+  /// Свой провайдер: адрес и модель видны и правятся. У Groq адрес прописан.
+  bool get _own => _speech == 'api';
+
+  bool get _keySet => widget.slot['key_set'] == true;
+
+  /// Своего провайдера можно удалить и без ключа, если сохранён адрес: forget
+  /// очищает адрес и модель. У Groq адрес прописан всегда, поэтому там удаление
+  /// зависит только от ключа.
+  bool get _canForget =>
+      _keySet ||
+      (_own && (widget.slot['url'] as String? ?? '').trim().isNotEmpty);
+
+  @override
+  void initState() {
+    super.initState();
+    url.text = widget.slot['url'] as String? ?? '';
+    model.text = widget.slot['model'] as String? ?? '';
+  }
+
+  @override
+  void dispose() {
+    url.dispose();
+    model.dispose();
+    key.dispose();
+    super.dispose();
+  }
+
+  /// Тело просьбы. Пустой ключ не посылаем: служба оставит сохранённый, и
+  /// смена одной модели ключ не потеряет.
+  Map<String, dynamic> _fields() => <String, dynamic>{
+    'speech': _speech,
+    if (_own) 'url': url.text.trim(),
+    if (_own) 'model': model.text.trim(),
+    if (key.text.trim().isNotEmpty) 'key': key.text.trim(),
+  };
+
+  /// Ключ обязателен, если его ещё нет; адрес и модель — у своего провайдера.
+  String? _missing() {
+    if (_own && (url.text.trim().isEmpty || model.text.trim().isEmpty)) {
+      return 'Впишите адрес и модель: без них провайдер не сохранить.';
+    }
+    if (!_keySet && key.text.trim().isEmpty) {
+      return _own
+          ? 'Вставьте ключ: без него провайдер не заработает.'
+          : 'Вставьте ключ Groq: без него распознавание через Groq не заработает.';
+    }
+    return null;
+  }
+
+  /// Ответ службы словами службы; технический текст в поле не выводим.
+  String _said(Object failure) {
+    if (failure is HttpException) {
+      final said = lineSentence(failure.message);
+      if (said.isNotEmpty) return said;
+    }
+    return 'Служба диктовки не ответила.';
+  }
+
+  /// «Проверить»: настоящий запрос к провайдеру, как в онбординге.
+  Future<void> _check() async {
+    final problem =
+        _own && (url.text.trim().isEmpty || model.text.trim().isEmpty)
+        ? 'Впишите адрес и модель, чтобы проверить провайдера.'
+        : null;
+    if (problem != null) {
+      setState(() => error = problem);
+      return;
+    }
+    setState(() {
+      busy = true;
+      error = null;
+      check = null;
+    });
+    try {
+      final answer = await widget.client.request('/provider/check', _fields());
+      if (!mounted) return;
+      final result = ProviderCheck.of(answer);
+      if (result.detail.isNotEmpty) {
+        // Техническая часть ответа — только в журнал, не на экран.
+        debugPrint('[provider/check] ${result.detail}');
+      }
+      setState(() => check = result);
+    } catch (failure) {
+      if (mounted) setState(() => error = _said(failure));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  /// «Сохранить»: POST /provider/apply, затем свежие настройки от службы.
+  Future<void> _save() async {
+    final problem = _missing();
+    if (problem != null) {
+      setState(() => error = problem);
+      return;
+    }
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await widget.client.request('/provider/apply', _fields());
+      final fresh = await widget.client.request('/settings');
+      if (mounted) {
+        Navigator.pop(context, <String, dynamic>{
+          'fresh': fresh,
+          'said': 'Провайдер сохранён',
+        });
+      }
+    } catch (failure) {
+      if (mounted) setState(() => error = _said(failure));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  /// «Удалить»: после подтверждения стирает ключ (и у своего — адрес и модель).
+  Future<void> _forget() async {
+    final approved = await askDanger(
+      context,
+      title: _own ? 'Удалить свой провайдер?' : 'Удалить ключ Groq?',
+      consequences: _own
+          ? <String>[
+              'Ключ, адрес и модель будут стёрты.',
+              'Диктовка через свой провайдер не заработает, пока его не настроить снова.',
+            ]
+          : <String>[
+              'Ключ Groq будет стёрт.',
+              'Диктовка через Groq не заработает, пока ключ не введён снова.',
+            ],
+      confirmLabel: 'Удалить',
+    );
+    if (approved != true || !mounted) return;
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await widget.client.request('/provider/forget', {'speech': _speech});
+      final fresh = await widget.client.request('/settings');
+      if (mounted) {
+        Navigator.pop(context, <String, dynamic>{
+          'fresh': fresh,
+          'said': _own ? 'Свой провайдер удалён' : 'Ключ Groq удалён',
+        });
+      }
+    } catch (failure) {
+      if (mounted) setState(() => error = _said(failure));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = LineTokens.of(context);
+    final title = _own ? 'Свой провайдер' : 'Ключ Groq';
+    return AlertDialog(
+      title: Text(title),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            if (!_own)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  'Адрес Groq уже прописан — нужен только ключ.',
+                  style: lineText(size: 13, color: tokens.muted),
+                ),
+              ),
+            if (_own) ...<Widget>[
+              _field(url, 'Адрес (URL)', hint: 'https://сервер/v1'),
+              const SizedBox(height: 10),
+              _field(model, 'Модель', hint: 'например whisper-large-v3'),
+              const SizedBox(height: 10),
+            ],
+            _field(
+              key,
+              _own ? 'Ключ' : 'Ключ Groq',
+              hint: 'вставьте ключ',
+              // Подсказка про пустое поле видна всегда, а не только в фокусе:
+              // без неё человек не поймёт, что пустой ключ ничего не меняет.
+              helper: _keySet ? 'оставьте пустым, чтобы не менять' : null,
+              obscure: !showKey,
+              suffix: IconButton(
+                tooltip: showKey ? 'скрыть' : 'показать',
+                icon: Icon(
+                  showKey
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 18,
+                ),
+                onPressed: () => setState(() => showKey = !showKey),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _keySet ? 'Ключ задан.' : 'Ключа нет.',
+              style: lineText(size: 12, color: tokens.muted),
+            ),
+            if (!_own) ...<Widget>[
+              const SizedBox(height: 10),
+              Row(
+                children: <Widget>[
+                  Text(
+                    'Где взять ключ: ',
+                    style: lineText(size: 13, color: tokens.muted),
+                  ),
+                  InkWell(
+                    key: const Key('groq-key-link'),
+                    onTap: () => openExternalUrl(
+                      Uri.parse('https://console.groq.com/keys'),
+                    ),
+                    child: Text(
+                      'Создать ключ в Groq',
+                      style: lineText(
+                        size: 13,
+                        color: tokens.accent,
+                        weight: FontWeight.w500,
+                      ).copyWith(decoration: TextDecoration.underline),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (check != null) ...<Widget>[
+              const SizedBox(height: 10),
+              Text(
+                check!.note,
+                style: lineText(
+                  size: 13,
+                  height: 1.45,
+                  color: check!.ok ? tokens.accent : tokens.danger,
+                ),
+              ),
+            ],
+            if (error != null) ...<Widget>[
+              const SizedBox(height: 10),
+              Text(
+                error!,
+                style: lineText(size: 13, height: 1.45, color: tokens.danger),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        if (_canForget)
+          TextButton(
+            onPressed: busy ? null : _forget,
+            child: Text('Удалить', style: TextStyle(color: tokens.danger)),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+        OutlinedButton(
+          onPressed: busy ? null : _check,
+          child: const Text('Проверить'),
+        ),
+        FilledButton(
+          onPressed: busy ? null : _save,
+          child: Text(busy ? 'Сохраняю…' : 'Сохранить'),
+        ),
+      ],
+    );
+  }
+
+  /// Поле в духе окна: та же рамка и радиус, что у ссылки подключения.
+  Widget _field(
+    TextEditingController controller,
+    String label, {
+    String? hint,
+    String? helper,
+    bool obscure = false,
+    Widget? suffix,
+  }) {
+    final tokens = LineTokens.of(context);
+    return TextField(
+      controller: controller,
+      obscureText: obscure,
+      autocorrect: false,
+      enableSuggestions: !obscure,
+      style: lineText(size: 14, color: tokens.ink),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        helperText: helper,
+        helperStyle: lineText(size: 12, color: tokens.muted),
+        hintStyle: lineText(size: 13, color: tokens.muted),
+        labelStyle: lineText(size: 13, color: tokens.muted),
+        suffixIcon: suffix,
+        filled: true,
+        fillColor: tokens.ground,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 12,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(LineTokens.fieldRadius),
+          borderSide: BorderSide(color: tokens.line),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(LineTokens.fieldRadius),
+          borderSide: BorderSide(color: tokens.line),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(LineTokens.fieldRadius),
+          borderSide: BorderSide(color: tokens.accent, width: 2),
+        ),
+      ),
     );
   }
 }

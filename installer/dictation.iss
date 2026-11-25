@@ -2,7 +2,7 @@
 ; /DAppVersion: одна версия у установщика, у пакета и у программы
 ; (internal/localdict/app.go). Расхождение ловят и сборка, и публикация.
 #ifndef AppVersion
-  #define AppVersion "1.13.2"
+  #define AppVersion "1.13.3"
 #endif
 ; Сколько установщик ждёт конца идущей записи, прежде чем отказаться ставить.
 ; Десять минут — предел самой программы по умолчанию (localdict.DefaultStopWait):

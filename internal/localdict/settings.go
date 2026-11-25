@@ -59,6 +59,9 @@ type SettingsView struct {
 	Speech     string          `json:"speech"`
 	Speeches   []SettingChoice `json:"speeches"`
 	SpeechNote string          `json:"speech_note"`
+	// Providers — оба провайдера со своим признаком ключа: окно настраивает
+	// каждый отдельно, не трогая второй. Ключ здесь не появляется никогда.
+	Providers []ProviderView `json:"providers"`
 	// Configured — провайдер настроен и может разбирать запись. Onboarding —
 	// его ещё нет, и окно показывает первый запуск: два пути, ключ и проверка.
 	Configured bool `json:"configured"`
@@ -86,6 +89,45 @@ type SettingsView struct {
 	// Microphone — состояние доступа к микрофону: unchecked, granted, denied.
 	// Это не настройка, а ответ системы; меняется кнопкой /microphone.
 	Microphone string `json:"microphone"`
+}
+
+// ProviderView — провайдер распознавания так, как его видит окно в настройках:
+// задан ли его ключ, какие адрес и модель записаны. Ключа здесь нет никогда.
+type ProviderView struct {
+	Key    string `json:"key"`
+	Title  string `json:"title"`
+	KeySet bool   `json:"key_set"`
+	URL    string `json:"url"`
+	Model  string `json:"model"`
+	// OwnURL — адрес вписан человеком (свой провайдер), а не взят у Groq.
+	OwnURL bool `json:"own_url"`
+}
+
+// ProviderViews — оба провайдера, каждый со своим признаком ключа.
+//
+// Адрес Groq берётся из той же константы, что и у проверки и разбора. Своему
+// провайдеру ключ ищется по адресу из настроек, и только если адрес есть:
+// KeyForURL с пустым адресом отдал бы ключ Groq, и «ключ задан» у своего
+// провайдера без адреса было бы ложью.
+func ProviderViews(voice *prefs.Voice) []ProviderView {
+	own := ProviderView{Key: "api", Title: "Свой провайдер", OwnURL: true}
+	if voice != nil {
+		own.URL = strings.TrimSpace(voice.SpeechURL)
+		own.Model = strings.TrimSpace(voice.SpeechModel)
+	}
+	if own.URL != "" {
+		own.KeySet = keyForVoice(voice).Set()
+	}
+	return []ProviderView{
+		{
+			Key:    "groq",
+			Title:  "Groq",
+			KeySet: speech.GroqKey(speech.ProvidersPath()).Set(),
+			URL:    speech.GroqBaseURL,
+			Model:  firstNonEmpty(groqRegistered().Model, speech.GroqModel),
+		},
+		own,
+	}
 }
 
 // SpeechChoices — провайдеры распознавания, которые видит человек.
@@ -189,6 +231,7 @@ func ReadSettings(voice *prefs.Voice, hotkey, microphone string) SettingsView {
 		Speech:           found,
 		Speeches:         SpeechChoices(voice),
 		SpeechNote:       SpeechNote(voice),
+		Providers:        ProviderViews(voice),
 		Configured:       speechConfigured(voice),
 		Onboarding:       !speechConfigured(voice),
 		SpeechModel:      speechModel(voice),
